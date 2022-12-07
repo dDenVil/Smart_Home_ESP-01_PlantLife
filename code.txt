@@ -1,0 +1,284 @@
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <EEPROM.h>
+#define EEPROM_SIZE 6 // 0-5 = hh1-mm1-hh2-mm2-RELAYmode-timezone     int,long... - don't work!!
+                       //         1   1   1   1      1        1
+// Wifi network station credentials
+#define WIFI_SSID "YOUR_SSID"
+#define WIFI_PASSWORD "PASS"
+// Telegram BOT Token (Get from Botfather)
+#define BOT_TOKEN "YOUR_BOT_TOCKEN"
+#define CHAT_ID "YOUR_TELEGRAM_ID"
+
+const unsigned long BOT_MTBS = 1000; // mean time between scan messages
+
+unsigned long bot_lasttime; // last time messages' scan has been done
+X509List cert(TELEGRAM_CERTIFICATE_ROOT);
+WiFiClientSecure secured_client;
+UniversalTelegramBot bot(BOT_TOKEN, secured_client);
+
+#define RELAY 0  //relay connected to  GPIO0
+boolean RELAYstatus = 0;
+
+
+unsigned long gettimer=0;
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+int currentSecond =0;
+int currentMinute =0;
+int currentHour =0;
+boolean RELAYmode=1;
+byte hh1=9; //hh to ON
+byte mm1=0; //mm to ON
+byte hh2=21; //hh to OFF
+byte mm2=0; //mm to OFF
+byte utcOffsetInSeconds = 3; //for time set GMT+3
+boolean starts=0;
+
+// Определение NTP-клиента для получения времени
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org" , utcOffsetInSeconds); // , utcOffsetInSeconds
+
+//_______________________________________________________________________________________________________________________________________________
+void bot_setup()
+{
+  const String commands = F("["
+                            "{\"command\":\"help\",  \"description\":\"Get bot usage help\"},"
+                           // "{\"command\":\"start\", \"description\":\"Message sent when you open a chat with a bot\"},"
+                            "{\"command\":\"status\",\"description\":\"Answer device current status\"}" // no comma on last command
+                            "]");
+  bot.setMyCommands(commands);
+  bot.sendMessage("376503154", "<b>ONLINE</b>","HTML");
+}
+//_______________________________________________________________________________________________________________________________________________
+void setup()
+{
+  Serial.begin(115200);
+  Serial.println();
+  EEPROM.begin(EEPROM_SIZE);// EEPROM size init
+
+  pinMode(RELAY,OUTPUT);
+  digitalWrite(RELAY, HIGH);
+
+  
+  // attempt to connect to Wifi network:
+  configTime(0, 0, "pool.ntp.org");      // get UTC time via NTP
+  secured_client.setTrustAnchors(&cert); // Add root certificate for api.telegram.org
+  Serial.print("Connecting to Wifi SSID ");
+  Serial.print(WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.print("\nWiFi connected. IP address: ");
+  Serial.println(WiFi.localIP());
+
+  EEPROM.get(0,hh1); //0-1 hh1
+  EEPROM.get(1,mm1); // 2-3 mm1
+  EEPROM.get(2,hh2); // 4-5 hh2
+  EEPROM.get(3,mm2); // 6-7 mm2
+  EEPROM.get(4,RELAYmode); //8-9 getting mode auto/manual 
+  EEPROM.get(5,utcOffsetInSeconds); //9-10 time zone 
+  
+  timeClient.begin();
+  bot_setup();
+  timeClient.setTimeOffset(utcOffsetInSeconds*3600);
+}
+//_______________________________________________________________________________________________________________________________________________
+void loop()
+{
+  if (millis() - bot_lasttime > BOT_MTBS)
+  {
+    timeClient.update();
+    currentHour = timeClient.getHours();
+    Serial.print(currentHour);  
+    currentMinute = timeClient.getMinutes();
+    Serial.print(":");
+    Serial.print(currentMinute); 
+    currentSecond = timeClient.getSeconds();
+    Serial.print(":");
+    Serial.println(currentSecond);  
+     
+  int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+  
+      while (numNewMessages)
+      {
+        Serial.println("got response");
+        handleNewMessages(numNewMessages);
+        numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+      }
+      
+    //RELAYmodework(RELAYmode,hh1,mm1,hh2, mm2); 
+    
+        if (starts==0 ) {          //after restart turn on
+         if (currentHour==hh1 && currentMinute>mm1) ON();
+         if (currentHour==hh2 && currentMinute<mm2) ON();
+         if (currentHour>hh1 && currentHour<hh2) ON(); 
+         //else digitalWrite(RELAY, HIGH);
+         starts=1;       
+        }
+    
+       
+        if (RELAYmode==1) { // RELAYmode means auto/manual mode
+      if (hh1==currentHour && mm1==currentMinute && RELAYstatus == 0) {
+        ON();   //auto turn on
+        }
+      else if (hh2==currentHour && mm2==currentMinute && RELAYstatus == 1) {
+        OFF();   //auto turn off
+        }
+   }
+    
+    bot_lasttime = millis();
+  }
+
+}
+//_______________________________________________________________________________________________________________________________________________
+ void handleNewMessages(int numNewMessages)
+{
+  Serial.print("handleNewMessages ");
+  Serial.println(numNewMessages);
+  
+  String answer;
+  for (int i = 0; i < numNewMessages; i++)
+  {
+      String chat_id = String(bot.messages[i].chat_id);
+      telegramMessage &msg = bot.messages[i];
+      if (chat_id != CHAT_ID){
+        bot.sendMessage(chat_id,msg.from_name + " don't even try. It is a personal home-bot!" , "");
+        String intruder =( "Intruder: " + chat_id +", "+ msg.from_name+", " + msg.text);
+        bot.sendMessage(CHAT_ID, intruder, "");
+      }
+      else {
+
+   
+    Serial.println("Received " + msg.text);
+    if (msg.text == "/help") {
+      answer = "So " + msg.from_name + ", you need my help, uh) me too!\n";
+      answer += "/ledON : to switch the Led ON\n";
+      answer += "/ledOFF : to switch the Led OFF\n";
+      answer += "/status : Returns status of  LED, time & mode...\n";
+      answer += "/mode : Auto or Manual \n";
+       answer += "/timezone 3: to set time zone 0...3...12 \n";
+    }
+    /*
+    else if (msg.text == "/start") {      //start menu
+      answer = "Hello " + msg.from_name + " Let's start: \n";
+      answer += "/ledON : to switch the Led ON\n";
+      answer += "/ledOFF : to switch the Led OFF\n";
+      answer += "/status : Returns status of LED, time & mode\n";
+      answer += "/mode : Auto or Manual \n";
+    }
+    */
+      else if (msg.text == "/ledON") {
+       ON();
+       answer = "Plant Led is ON";
+      }
+    else if (msg.text == "/ledOFF") {
+       OFF();
+       answer = "Plant Led is OFF";
+      }   
+    else if (msg.text.substring(0,9) == "/timezone") {  
+       String hhh=msg.text.substring(10,12);
+       int GMT=(byte)hhh.toInt();
+       utcOffsetInSeconds=GMT;
+       EEPROM.put(5,utcOffsetInSeconds); 
+       EEPROM.commit();
+       timeClient.setTimeOffset(utcOffsetInSeconds*3600);
+       answer = ("Time zone changed: "+String(utcOffsetInSeconds*3600)+  "\nCheck /status ");
+      }  
+    else if (msg.text == "/status") {  //status menu
+      if (RELAYstatus)
+        answer = ("Plant LED is ON \n"+ String(currentHour)+":"+ String(currentMinute)+":"+ String(currentSecond));
+      else
+        answer = ("Plant LED is OFF \n"+ String(currentHour)+":"+ String(currentMinute)+":"+ String(currentSecond));
+      if (RELAYmode)
+      answer +="\nMode: Auto";
+      else
+      answer +="\nMode: Manual";  
+      answer += ("\nTimer: "+ String(hh1)+":"+ String(mm1)+" - "+ String(hh2)+":"+ String(mm2)); //display what autotimer settings time
+    }
+    else if (msg.text == "/mode") {
+    answer ="Current mode is ";   
+      if (RELAYmode) 
+      answer +=("AUTO. Timer is from " + String(hh1)+":"+String(mm1)+" to "+ String(hh2)+":"+ String(mm2));
+      else
+      answer +=("MANUAL. Timer is from " + String(hh1)+":"+String(mm1)+" to "+ String(hh2)+":"+ String(mm2));   
+          
+    answer +=("\nTo change press: /mode_auto or /mode_manual");  
+    answer+="\nTo set new light time. Example: /hh 08:00-22:45";    
+    }   
+    else if (msg.text == "/mode_auto") {
+    RELAYmode=1;
+     EEPROM.put(4,RELAYmode); // saving to EEPROM
+     EEPROM.commit();
+    answer =("Current mode is AUTO. From " + String(hh1)+":"+String(mm1)+" to "+ String(hh2)+":"+ String(mm2));
+    answer+="\nTo set new light time. Example: /hh 08:00-22:45";
+    } 
+    else if (msg.text == "/mode_manual") {
+    RELAYmode=0; 
+    EEPROM.put(4,RELAYmode); // saving to EEPROM
+    EEPROM.commit();
+    answer ="Current mode is MANUAL";
+    }
+    else if (msg.text.substring(0,3) == "/hh") {
+    answer ="New working time is: "; 
+    String Nhh1=msg.text.substring(4,6);
+    String Nmm1=msg.text.substring(7,9);  
+    String Nhh2=msg.text.substring(10,12);
+    String Nmm2=msg.text.substring(13,15);
+    hh1=(byte)Nhh1.toInt();
+    hh2=(byte)Nhh2.toInt();
+    mm1=(byte)Nmm1.toInt();
+    mm2=(byte)Nmm2.toInt();
+    
+    EEPROM.put(0,hh1); //0-1 hh1 Saving new values to EEPROM
+    EEPROM.put(1,mm1); // 2-3 mm1
+    EEPROM.put(2,hh2); // 4-5 hh2
+    EEPROM.put(3,mm2); // 6-7 mm2
+    EEPROM.commit();
+
+    answer+=(String(hh1)+":"+String(mm1)+" - "+ String(hh2)+":"+ String(mm2));
+    answer+=("\nChanged! Auto mode");
+    RELAYmode=1;
+    EEPROM.put(4,RELAYmode); // saving to EEPROM
+    EEPROM.commit();
+    }
+    else
+      answer = "... ";
+     // answer+= (msg.text.substring(0,3));
+
+    bot.sendMessage(msg.chat_id, answer, "");
+      }
+  }
+}
+
+//_______________________________________________________________________________________________________________________________________________
+/*
+int RELAYmodework(boolean RELAYmode, int hh1, int mm1, int hh2, int mm2) {
+
+    if (RELAYmode==1) {
+      if (hh1==currentHour && mm1==currentMinute && RELAYstatus == 0) {
+        digitalWrite(RELAY, LOW);   //auto turn onn
+        RELAYstatus = 1;
+        //bot.sendMessage(msg.chat_id, Auto ON, "");
+        }
+      else if (hh2==currentHour && mm2==currentMinute && RELAYstatus == 1) {
+        digitalWrite(RELAY, HIGH);   //auto turn off
+        RELAYstatus = 0;
+        //bot.sendMessage(msg.chat_id, Auto OFF, "");
+        }
+   }
+}
+   */
+   void ON(void) {
+       digitalWrite(RELAY, LOW);   //turn on with start
+       RELAYstatus = 1;
+   }
+      void OFF(void) {
+       digitalWrite(RELAY, HIGH);   //turn on with start
+       RELAYstatus = 0;
+   }
