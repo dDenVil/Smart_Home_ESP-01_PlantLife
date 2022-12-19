@@ -48,7 +48,7 @@ We will need relay module with ESP-01 and any step down conventer
   - Add board to the Arduino IDE (Tools->Board->Board Manager->`ESP8266`)
   - Choose correct board and Port (Tools->Board->ESP8266->Generic ESP8266 Module)
   - Install [Telegram Bot Library](https://github.com/witnessmenow/Universal-Arduino-Telegram-Bot) (Sketch->Include library->Add .ZIP library)
-  - Start ESP in flash mode and load the [code](code.txt)
+  - Start the ESP in flash mode (short GPIO0 and GND) and load the [code](code.txt)
 - Connect everything together
   - to power up the relay [module](https://github.com/dDenVil/Smart_Home_ESP-01_PlantLife/blob/main/Readme_assets/relay.png?raw=true) connect it to the [step-down conventer](https://github.com/dDenVil/Smart_Home_ESP-01_PlantLife/blob/main/Readme_assets/dc-dc-dsn-mini-360-01.jpg?raw=true)
   - Connect by the [scheme](https://github.com/dDenVil/Smart_Home_ESP-01_PlantLife/blob/main/scheme.png?raw=true)
